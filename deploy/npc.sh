@@ -77,6 +77,19 @@ why_not_ready() {
         echo "NPC_TELEGRAM_TOKEN is empty in $ENV_FILE"; return; }
     grep -q '^NPC_TELEGRAM_CHAT_ID=.\+' <<<"$env_text" || {
         echo "NPC_TELEGRAM_CHAT_ID is empty in $ENV_FILE"; return; }
+
+    # Everything above is about files. This is about the screen, and it is the
+    # one that was missing: a reference and a token say nothing about whether
+    # anyone ever connected to the peer. Reporting "ready" with no session
+    # window is the same silent lie the dead-session alert exists to catch.
+    command -v npc-setup >/dev/null || return
+    seen="$(DISPLAY=$DISPLAY_NUM npc-setup --inspect 2>/dev/null)" || return
+    grep -q '"windows": \[\]' <<<"$seen" && {
+        echo "no RustDesk session window on $DISPLAY_NUM - connect to the peer over
+  the VNC tunnel, then run $RUN_HOME/bin/pin-window.sh"; return; }
+    grep -q '"fullscreen": true' <<<"$seen" && {
+        echo "the session window is fullscreen, so its geometry is not pinned -
+  run $RUN_HOME/bin/pin-window.sh"; return; }
 }
 
 case "${1:-up}" in
