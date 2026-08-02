@@ -128,10 +128,25 @@ stream sharp, and the operator only reads Telegram.
 Two commands, and they are the whole interface:
 
 ```bash
-git clone <this repo> ~/simple
 ~/simple/deploy/npc.sh up          # install if needed, start everything
 ~/simple/deploy/npc.sh down        # stop everything
 ```
+
+On a **genuinely bare** box nothing is there — not even git to clone this with,
+which is the one thing `up` cannot bootstrap itself out of:
+
+```bash
+apt-get update && apt-get install -y git
+git clone <this repo> /opt/npc
+/opt/npc/deploy/npc.sh up
+```
+
+Everything after that is handled: `curl`, `ca-certificates` and the rest are in
+the package list rather than assumed. It runs either as **root with no sudo
+installed** — the usual bare VPS — or as a **sudo user with no root login** —
+the usual cloud image. Under plain root there is no login user to hang an X
+session on, so it creates one, `npc`, with a real home directory, rather than
+scattering RustDesk's config through `/root`. Override with `NPC_USER`.
 
 `up` is idempotent: it installs only what is absent, starts only what is
 stopped, and enables the units so a reboot brings them back. It refuses to
