@@ -95,12 +95,33 @@
   var message = document.getElementById('message');
   var pending = null;
 
+  /* The switch has to be flippable from anywhere, and GitHub Pages serves only
+     static files, so the page polls one instead of listening for a push. Edit
+     state.json on github.com and every open copy of this page picks it up
+     within a poll or two: the commit is the whole control plane.
+
+     A failed fetch keeps the last known value rather than falling back to
+     false. Offline must not silently disarm the switch. */
+  var FLAG_URL = 'state.json';
+  var POLL_MS = 5000;
+  var remoteSlot = false;
+
+  function poll() {
+    // The query string defeats the CDN; no-store defeats the browser.
+    fetch(FLAG_URL + '?t=' + Date.now(), { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j) remoteSlot = !!j.slot; })
+      .catch(function () {});
+  }
+  poll();
+  setInterval(poll, POLL_MS);
+
   document.getElementById('book').onclick = function () {
     if (pending) return;
     // A second of thinking, exactly as the real page takes to answer.
     pending = setTimeout(function () {
       pending = null;
-      var queued = document.getElementById('flag').checked;
+      var queued = remoteSlot || document.getElementById('flag').checked;
       box.className = queued ? 'queued' : 'busy';
       message.textContent = queued ? 'Вы в очереди' : 'все занято';
       dialog.className = 'on';

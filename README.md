@@ -42,7 +42,8 @@ inversion is the whole design.
 | [npc/runner.py](npc/runner.py) | Setup, the watch loop, the lock, the log |
 | [npc/cli.py](npc/cli.py) | `npc-setup`, `npc-watch`, `npc-calibrate` |
 | [selftest.py](selftest.py) | The whole loop against fake frames, with no display and no input |
-| [testpage/index.html](testpage/index.html) | A stand-in queue page, for rehearsing the loop locally |
+| [docs/index.html](docs/index.html) | A stand-in queue page, for rehearsing the loop locally |
+| [docs/state.json](docs/state.json) | The rehearsal's remote switch, polled by that page |
 
 ---
 
@@ -621,11 +622,11 @@ Paths and defaults are overridable: `NPC_HOME`, `NPC_OPERATOR_LOCK`,
 
 ## A local rehearsal: no VM, no Australia
 
-[testpage/index.html](testpage/index.html) is the queue page in miniature, for
+[docs/index.html](docs/index.html) is the queue page in miniature, for
 exercising the loop before any of the above exists.
 
 ```bash
-python3 -m http.server 8000 -d testpage      # then http://localhost:8000
+python3 -m http.server 8000 -d docs      # then http://localhost:8000
 ```
 
 - **BOOK** waits one second, then shows a grey box: *все занято*, with a small
@@ -633,9 +634,16 @@ python3 -m http.server 8000 -d testpage      # then http://localhost:8000
 - The unlabelled checkbox in the top-left corner is the switch. With it ticked,
   BOOK shows a green box instead — bigger, higher up, *Вы в очереди*, with a
   large green OK. That is a slot appearing.
+- **The same switch, flippable from anywhere:** the page polls
+  [docs/state.json](docs/state.json) every five seconds and treats
+  `{"slot": true}` exactly like a ticked box. Publish `docs/` with GitHub Pages
+  and editing that one file on github.com flips the switch on the son's screen
+  without touching his machine. A failed fetch keeps the last known value —
+  a network blip must not silently disarm the switch. It needs http(s):
+  under `file://` the fetch is blocked and only the checkbox works.
 - Nothing on the page hovers, focuses, animates or ticks. Pixels change only
   when the state changes, which is what lets you see the watcher's real noise
-  floor rather than the cursor's.
+  floor rather than the cursor's. The poll draws nothing.
 
 **The reference is the dialog, not the empty page.** The loop screenshots
 *after* clicking BOOK and waiting, so record with *все занято* on screen. BOOK
