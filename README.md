@@ -44,6 +44,10 @@ inversion is the whole design.
 | [selftest.py](selftest.py) | The whole loop against fake frames, with no display and no input |
 | [docs/index.html](docs/index.html) | A stand-in queue page, for rehearsing the loop locally |
 | [docs/state.json](docs/state.json) | The rehearsal's remote switch, polled by that page |
+| [deploy/bootstrap.sh](deploy/bootstrap.sh) | Fresh VM to running services, in one command |
+| [deploy/display.sh](deploy/display.sh) | Xvfb, openbox and x11vnc, which share a lifetime |
+| [deploy/rustdesk-client.sh](deploy/rustdesk-client.sh) | The client, with the environment it needs |
+| [deploy/pin-window.sh](deploy/pin-window.sh) | Clears fullscreen, pins the geometry, verifies it |
 
 ---
 
@@ -130,9 +134,26 @@ No firewall rule is needed and none should be added: nothing listens on a public
 interface. x11vnc binds loopback and is reached through the SSH tunnel that
 `gcloud compute ssh` already gives you.
 
+Then, on the VM, one script does the rest:
+
 ```bash
-sudo apt install -y xvfb openbox x11vnc xdotool mesa-utils dbus-x11 \
-                    libgl1-mesa-dri libglx-mesa0 libegl-mesa0 \
+git clone <this repo> ~/simple
+~/simple/deploy/bootstrap.sh
+```
+
+[deploy/bootstrap.sh](deploy/bootstrap.sh) installs the packages and the
+RustDesk client, builds the venv, writes and starts the display and client
+services, and refuses to finish unless Mesa reports llvmpipe. It deliberately
+does **not** start the watch loop: that needs a human to connect RustDesk to
+the peer, pin the window and record the reference, and nothing can do those
+without seeing the son's screen. It prints those remaining steps and stops.
+
+Everything below this line is what the script does and why, for when it does
+not survive contact with a newer Debian.
+
+```bash
+sudo apt install -y xvfb openbox x11vnc xdotool wmctrl x11-utils mesa-utils \
+                    dbus-x11 libgl1-mesa-dri libglx-mesa0 libegl-mesa0 \
                     python3-venv python3-tk
 
 python3 -m venv ~/.npc-venv
@@ -142,6 +163,11 @@ sudo ln -sf ~/.npc-venv/bin/npc-setup     /usr/local/bin/npc-setup
 sudo ln -sf ~/.npc-venv/bin/npc-calibrate /usr/local/bin/npc-calibrate
 ```
 
+`wmctrl` and `x11-utils` are not optional and were missing from the first
+install here. `xprop`, from `x11-utils`, is how the window's fullscreen state
+is read; `wmctrl` is the only way to clear it. Both failures are silent — see
+gotcha 2 below.
+
 `openbox` matters: RustDesk needs focus handling and its dialogs misbehave
 without a window manager. `python3-tk` is a hard requirement of pyautogui — one
 of its dependencies calls `sys.exit()` at import time when tkinter is absent.
@@ -150,7 +176,7 @@ Everything Python is in `pyproject.toml`, so the venv is disposable.
 Check the install without a display:
 
 ```bash
-~/.npc-venv/bin/python selftest.py     # 44 checks, no X server needed
+~/.npc-venv/bin/python selftest.py     # 56 checks, no X server needed
 ```
 
 If `python3-tk` is missing you will not get a traceback, you will get this —
@@ -168,7 +194,15 @@ as a lighter fallback, but the standard build works.
 ```bash
 wget https://github.com/rustdesk/rustdesk/releases/download/1.4.9/rustdesk-1.4.9-x86_64.deb
 sudo apt install -y ./rustdesk-1.4.9-x86_64.deb
+sudo systemctl disable --now rustdesk        # see below
 ```
+
+That last line matters. The `.deb` installs and starts `rustdesk.service`,
+which makes the machine a remote-control **host**. This machine is not one, it
+is a client, and leaving the service running means two instances sharing one
+config directory — which is where "Key mismatch" comes from. The installer also
+prints `Failed to stop rustdesk.service: Unit rustdesk.service not loaded` on a
+first install; that one is harmless.
 
 ---
 
@@ -211,7 +245,7 @@ xdotool windowsize "$WID" 1600 950
 xdotool windowmove "$WID" 100 40
 ```
 
-Four things the environment will bite you with:
+Six things the environment will bite you with:
 
 1. **Set `HOME` and the XDG directories explicitly.** Without them the client
    logs `MissingPlatformDirectoryException: Unable to get application documents
@@ -219,18 +253,40 @@ Four things the environment will bite you with:
    and saved peers — leave it broken and it may not remember the host between
    restarts, which breaks unattended operation.
 
-2. **Do not make the window fullscreen.** Flutter on Linux reports incorrect
-   display information via `MediaQuery` under Xvfb specifically when fullscreen
+2. **The session window opens fullscreen, and `xdotool` will not tell you.**
+   This is the one that cost the most here. The window arrives with
+   `_NET_WM_STATE_FULLSCREEN` set, and openbox **silently ignores every
+   `xdotool windowsize`** while it is — the command exits 0 and changes
+   nothing. Measured on a live session: asked for 1600×950, got 1920×1080, no
+   error anywhere. Recording coordinates against a geometry that was never
+   applied is worse than a crash, because the crash would have told you.
+
+   Fullscreen is also what makes Flutter report incorrect display information
+   via `MediaQuery` under Xvfb
    ([flutter#162801](https://github.com/flutter/flutter/issues/162801)); the
-   documented workaround is to run windowed. The window opens centred at roughly
-   800×590, so resize it to a fixed large size and strip the decorations with an
-   openbox rule instead — then verify the geometry before recording anything:
+   documented workaround is to run windowed.
+
+   Clear the state first, then resize, then **verify** — which is all
+   [deploy/pin-window.sh](deploy/pin-window.sh) does:
+
+   ```bash
+   wmctrl -i -r "$WID" -b remove,fullscreen
+   xdotool windowsize "$WID" 1600 950
+   xdotool windowmove "$WID" 100 40
+   xdotool getwindowgeometry --shell "$WID"    # confirm, do not assume
+   ```
+
+   `npc-setup --inspect` and `npc-setup --name ...` both report
+   `"fullscreen": true` and a warning when they see it, so the trap is visible
+   from the tool that matters rather than only from `xprop`.
+
+   Decorations go by openbox rule rather than by making the window fullscreen:
 
    ```xml
    <!-- ~/.config/openbox/rc.xml, inside <applications> -->
    <application name="rustdesk">
      <decor>no</decor>
-     <position force="yes"><x>100</x><y>40</y></position>
+     <maximized>no</maximized>
    </application>
    ```
 
@@ -246,6 +302,19 @@ Four things the environment will bite you with:
    ([#13693](https://github.com/rustdesk/rustdesk/issues/13693),
    [#10088](https://github.com/rustdesk/rustdesk/issues/10088)). The `pkill`
    above is part of startup, not something to remember.
+
+5. **Unset `WAYLAND_DISPLAY` if anything on this box has one.** A GCP VM does
+   not, but a laptop standing in for one does, and both failures are baffling:
+   `x11vnc` exits immediately with *"Wayland display server detected ...
+   Exiting"* even though it was pointed at `:99`, a real X server — it checks
+   only that the variable exists, never its value — and GTK quietly prefers
+   Wayland over `:99` despite `GDK_BACKEND=x11`. Every script in
+   [deploy/](deploy/) starts with `unset WAYLAND_DISPLAY XDG_SESSION_TYPE`.
+
+6. **`xdotool type --window` does nothing to this client.** That form sends
+   `XSendEvent`, and GTK and Flutter both ignore synthetic events. Drop
+   `--window`, activate the window first, and let XTEST deliver the keystrokes.
+   Only relevant while setting up by hand: the loop never types.
 
 ### The unattended password is a credential
 
@@ -714,7 +783,7 @@ one and two mismatches being absorbed and three not, the stop, the auto-resume,
 a booking form on screen keeping the loop from resuming, a vanished window and a
 moved window, the operator pause, the resolution guard, the busy lock, plan
 validation, the multipart upload body, the token never reaching a log line, the
-photo-to-text fallback, and the geometry of the mouse path. 44 checks, no display
+photo-to-text fallback, and the geometry of the mouse path. 56 checks, no display
 needed.
 
 Run end to end on a real `Xvfb :77` against a stand-in window renamed to
@@ -727,16 +796,19 @@ son's machine faked. The Telegram transport was verified against a loopback HTTP
 server: a 14 KB PNG uploaded as multipart with the caption and chat id, two
 failures retried into a success, and text-only sends as JSON.
 
-**Not verified, and worth doing early on the real VM:** that the Flutter client
-renders a *live remote session* at a usable framerate under software rendering.
-The client's own UI is known to render on Xvfb with llvmpipe; video decode is
-CPU-side VP8/VP9 and should be fine, but confirm it against a real host before
-trusting the loop on top of it. If it disappoints, the fallbacks in order are the
-`-sciter` build (Cairo/CPU, no GL dependency at all, and single-window so the
-multi-window gotcha disappears — but deprecated upstream); a real Xorg with
-`xserver-xorg-video-dummy`, which has fuller GLX and DRI plumbing; or TigerVNC's
-`Xvnc`, which is also a real X server and lets you watch what is happening
-instead of debugging blind through screenshots.
+**The architectural unknown is now answered.** The Flutter client renders a
+*live remote session*, not merely its own UI, at a usable framerate on
+`Xvfb :99` with llvmpipe and no GPU — verified against a real Windows host over
+a LAN, Mesa 25.2.8, OpenGL 4.5. Video decode is CPU-side VP8/VP9 and costs
+little. **None of the fallbacks are needed**: not the `-sciter` build, not a
+real Xorg with `xserver-xorg-video-dummy`, not TigerVNC's `Xvnc`. They are
+listed here only so the next person knows they were considered and why they
+were not used.
+
+On that same run the noise floor over a LAN measured **exactly zero** — 45
+comparisons of a settled screen, not one changed tile. That number will not
+survive the trip to Australia, which is the whole reason `npc-calibrate` exists
+rather than a hard-coded threshold.
 
 Also unexercised here: x11vnc over an SSH tunnel from another machine, and
 Telegram against Telegram's own servers.

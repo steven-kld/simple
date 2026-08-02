@@ -23,6 +23,17 @@ STOPPED = "stopped"
 CHANGED = "changed"
 SESSION = "session"
 
+# RustDesk opens its session window fullscreen, and that state defeats the two
+# things the whole design rests on: openbox ignores `xdotool windowsize` while
+# it is set, so a window that looks pinned is not, and Flutter under Xvfb
+# reports wrong display metrics in it (flutter#162801). Clear it before
+# recording anything: `wmctrl -i -r <id> -b remove,fullscreen`.
+FULLSCREEN_WARNING = (
+    "the session window is fullscreen; clear it with "
+    "`wmctrl -i -r <id> -b remove,fullscreen` and pin the geometry, or "
+    "xdotool will silently refuse to resize it"
+)
+
 
 class Abort(Exception):
     """Carries the JSON object the CLI will print before exiting."""
@@ -198,7 +209,7 @@ def record(name, book, ok, threshold=None, window_name=None, content=None,
             f"wrong screen. Delete {config.refs_dir(name)} deliberately, or pass --force."
         )
 
-    window = screen.session_window(window_name)
+    wid, window = screen.session(window_name)
     if window is None:
         raise _error(
             f"no window matching {window_name or config.window_name()!r} on display "
@@ -276,7 +287,7 @@ def record(name, book, ok, threshold=None, window_name=None, content=None,
         f"status=recorded window={window} content={rect} watch={watch} "
         f"threshold={plan['threshold']}",
     )
-    return {
+    result = {
         "status": "ok",
         "name": name,
         "window": window.as_dict(),
@@ -291,6 +302,11 @@ def record(name, book, ok, threshold=None, window_name=None, content=None,
         "plan": str(config.scenario_path(name)),
         "reference": str(config.boring_path(name)),
     }
+    if screen.is_fullscreen(wid):
+        # Not fatal - the coordinates just recorded are real. But the geometry
+        # guard cannot protect what the window manager will not hold still.
+        result["warning"] = FULLSCREEN_WARNING
+    return result
 
 
 def _inside(rect, point):
@@ -323,13 +339,18 @@ def inspect(window_name=None):
         "screen": {"width": width, "height": height},
         "pattern": window_name or config.window_name(),
         "rustdesk_running": screen.process_alive(),
-        "windows": [{"id": wid, **rect.as_dict()} for wid, rect in found],
+        "windows": [
+            {"id": wid, **rect.as_dict(), "fullscreen": screen.is_fullscreen(wid)}
+            for wid, rect in found
+        ],
     }
     if found:
-        window = found[0][1]
+        wid, window = found[0]
         rect = screen.content_rect(frame, window)
         out["content"] = rect.as_dict()
         out["letterboxed"] = window.as_dict() != rect.as_dict()
+        if screen.is_fullscreen(wid):
+            out["warning"] = FULLSCREEN_WARNING
     return out
 
 

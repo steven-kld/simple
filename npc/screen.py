@@ -55,7 +55,9 @@ def _session():
     global _sct
     if _sct is None:
         try:
-            _sct = mss.mss()
+            # mss.mss() is deprecated from mss 10 and warns on every start; the
+            # class is the same object under a name that will survive.
+            _sct = (getattr(mss, "MSS", None) or mss.mss)()
         except Exception as exc:  # no display, bad XAUTHORITY, Xvfb not running
             raise DisplayError(
                 f"cannot connect to display {os.environ.get('DISPLAY')!r} "
@@ -134,14 +136,55 @@ def windows(pattern=None):
     return found
 
 
-def session_window(pattern=None):
-    """The remote session window, or None when the session is not up.
+def session(pattern=None):
+    """The remote session window as (id, geometry), or (None, None).
 
     Several windows can match while RustDesk is connecting, so take the
     largest: the remote desktop is always bigger than a dialog.
     """
     found = windows(pattern)
-    return found[0][1] if found else None
+    return found[0] if found else (None, None)
+
+
+def session_window(pattern=None):
+    return session(pattern)[1]
+
+
+def window_state(wid):
+    """The _NET_WM_STATE atoms on a window, lowercased and unprefixed.
+
+    Absent xprop means no opinion rather than "no states": guessing here would
+    turn a missing tool into a false all-clear.
+    """
+    try:
+        proc = subprocess.run(
+            ["xprop", "-id", str(wid), "_NET_WM_STATE"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    _, _, value = proc.stdout.partition("=")
+    return {
+        part.strip().replace("_NET_WM_STATE_", "").lower()
+        for part in value.split(",")
+        if part.strip()
+    }
+
+
+def is_fullscreen(wid):
+    """True only when the window is known to be fullscreen.
+
+    Worth reporting because fullscreen breaks two things at once: openbox
+    silently ignores `xdotool windowsize` while it is set, so a window that
+    looks pinned is not, and Flutter under Xvfb reports wrong display metrics
+    in that state (flutter#162801). RustDesk opens its session window this way.
+    """
+    states = window_state(wid)
+    return bool(states and "fullscreen" in states)
 
 
 def process_alive():

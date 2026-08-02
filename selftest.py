@@ -147,7 +147,10 @@ def capture():
 
 
 screen.capture = capture
+screen.session = lambda pattern=None: ("1", state["window"])
 screen.session_window = lambda pattern=None: state["window"]
+# No X server, so no window properties to read; the loop must not care.
+screen.is_fullscreen = lambda wid: False
 screen.process_alive = lambda: True
 runner.mouse.click = lambda x, y: state["clicks"].append((x, y))
 
@@ -178,6 +181,24 @@ check(
     and result["letterboxed"],
     str(result.get("content")),
 )
+
+check(
+    "a pinned window records without a fullscreen warning",
+    "warning" not in result,
+    str(result.get("warning")),
+)
+
+# RustDesk opens its session window fullscreen, and openbox then ignores every
+# attempt to resize it - so the window looks pinned and is not. Silent, and
+# only visible in xprop, which is exactly why it is worth saying out loud.
+screen.is_fullscreen = lambda wid: True
+fullscreen = runner.record("demo", BOOK, OK, threshold=0.04, force=True)
+check(
+    "a fullscreen session window is recorded but reported",
+    fullscreen["status"] == "ok" and "wmctrl" in fullscreen.get("warning", ""),
+    str(fullscreen.get("warning")),
+)
+screen.is_fullscreen = lambda wid: False
 
 plan = runner.parse_plan(config.scenario_path("demo").read_text(), "plan")
 check(
