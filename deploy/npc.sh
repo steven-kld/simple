@@ -15,7 +15,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DISPLAY_NUM="${NPC_DISPLAY:-:99}"
 NAME="${NPC_NAME:-booking}"
-UNITS=(npc-display npc-rustdesk npc-control)
+UNITS=(npc-display npc-rustdesk)
 ENV_FILE=/etc/npc.env
 UNIT_FILE=/etc/systemd/system/npc-display.service
 
@@ -46,18 +46,37 @@ and deploy/rustdesk-client.sh by hand and keep the shell open."
 # login. Both are normal, so neither is assumed.
 if [ "$(id -u)" -eq 0 ]; then
     SUDO=""
+    read_env() { cat "$ENV_FILE" 2>/dev/null; }
 else
     command -v sudo >/dev/null || die "not root, and sudo is not installed"
     SUDO="sudo"
+    # Plain read first - bootstrap gives the file to this user. The sudo
+    # fallback covers a file placed by hand, and -n means it never prompts:
+    # asking for a password to print a hint is worse than skipping the hint.
+    read_env() { cat "$ENV_FILE" 2>/dev/null || sudo -n cat "$ENV_FILE" 2>/dev/null; }
 fi
 
 # The loop cannot start before a human has connected RustDesk to the peer and
-# recorded the boring reference against it. Nothing here can do that, so `up`
-# reports what is missing instead of pretending.
-ready_to_watch() {
-    [ -f "$HOME_DIR/refs/$NAME/boring.png" ] || return 1
-    $SUDO grep -q '^NPC_TELEGRAM_TOKEN=.\+' "$ENV_FILE" 2>/dev/null || return 1
-    $SUDO grep -q '^NPC_TELEGRAM_CHAT_ID=.\+' "$ENV_FILE" 2>/dev/null || return 1
+# recorded the boring reference against it. Nothing here can do that, so this
+# says exactly which thing is missing - "one of these two" sends you looking in
+# the wrong place, which it did.
+#
+# Prints the reason, or nothing at all when ready. Cheapest checks first, so a
+# machine with nothing installed never reaches the one that needs a password.
+why_not_ready() {
+    installed || { echo "not installed; run '$0 up'"; return; }
+    [ -f "$HOME_DIR/refs/$NAME/boring.png" ] || {
+        echo "no reference at $HOME_DIR/refs/$NAME/ - record one with npc-setup"; return; }
+    [ -e "$ENV_FILE" ] || { echo "$ENV_FILE is missing; '$0 up' writes it"; return; }
+
+    env_text="$(read_env)"
+    # Unreadable without a password is not the same as empty, and guessing
+    # either way would be a lie. Let the loop's own refusal be the check.
+    [ -n "$env_text" ] || return
+    grep -q '^NPC_TELEGRAM_TOKEN=.\+' <<<"$env_text" || {
+        echo "NPC_TELEGRAM_TOKEN is empty in $ENV_FILE"; return; }
+    grep -q '^NPC_TELEGRAM_CHAT_ID=.\+' <<<"$env_text" || {
+        echo "NPC_TELEGRAM_CHAT_ID is empty in $ENV_FILE"; return; }
 }
 
 case "${1:-up}" in
@@ -68,6 +87,15 @@ up)
     bold "starting the display and the client"
     # enable, not just start: on a server the point is surviving a reboot.
     $SUDO systemctl enable --quiet --now "${UNITS[@]}"
+
+    # The endpoint refuses to serve without a token, and Restart=always would
+    # turn that refusal into a crash loop every ten seconds. So it is started
+    # only once there is something for it to check against.
+    if grep -q '^NPC_CONTROL_TOKEN=.\+' <<<"$(read_env)"; then
+        $SUDO systemctl enable --quiet --now npc-control
+    else
+        echo "  npc-control not started: NPC_CONTROL_TOKEN is empty in $ENV_FILE"
+    fi
     sleep 5
 
     # The check that decides everything. No environment variable rescues a
@@ -80,15 +108,16 @@ Check that Xvfb started with +extension GLX and that libgl1-mesa-dri is installe
   journalctl -u npc-display -n 40" ;;
     esac
 
-    if ready_to_watch; then
+    reason="$(why_not_ready)"
+    if [ -z "$reason" ]; then
         echo "  ready. Start the loop when the peer's screen is where you want it:"
         echo "    $0 start                       # here"
         echo "    curl -X POST -H 'Authorization: Bearer <token>' \\"
         echo "         http://<host>:8787/start  # from anywhere"
     else
         warn "
-The display, the client and the control endpoint are up. The loop is not, and
-cannot be yet - it needs a reference recorded against the peer's real screen:
+The display, the client and the control endpoint are up. The loop is not:
+  $reason
 
   1. ssh -N -L 5900:127.0.0.1:5900 $(id -un)@$(hostname -f 2>/dev/null || hostname)
      then point a VNC client at 127.0.0.1:5900
@@ -116,12 +145,14 @@ pauses rather than fighting you for the cursor."
 start)
     # The loop never starts by itself, here or over HTTP: someone has to know
     # the peer's screen is in the state the reference was recorded against.
-    ready_to_watch || die "no reference for '$NAME' yet, or $ENV_FILE is empty"
+    reason="$(why_not_ready)"
+    [ -z "$reason" ] || die "$reason"
     $SUDO systemctl start npc
     echo "  watching '$NAME'. Follow it with: $0 logs"
     ;;
 
 stop)
+    installed || die "not installed; run '$0 up'"
     $SUDO systemctl stop npc
     echo "  loop stopped. The display and the client are still up."
     ;;
@@ -130,9 +161,9 @@ down)
     bold "stopping"
     # The loop first: it must not click into a window that is being torn down.
     $SUDO systemctl stop npc 2>/dev/null || true
-    $SUDO systemctl disable --quiet --now "${UNITS[@]}" 2>/dev/null || true
+    $SUDO systemctl disable --quiet --now npc-control "${UNITS[@]}" 2>/dev/null || true
     $SUDO rm -f "${NPC_OPERATOR_LOCK:-/tmp/npc-operator-present}"
-    for unit in npc "${UNITS[@]}"; do
+    for unit in npc npc-control "${UNITS[@]}"; do
         printf '  %-14s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
     ;;

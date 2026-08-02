@@ -221,6 +221,10 @@ NPC_CONTROL_BIND=127.0.0.1
 NPC_CONTROL_PORT=8787
 ENV
 fi
+# Owned by the service user, not root: systemd reads it as root either way,
+# and the loop gets the token in its environment regardless, so root-only
+# ownership bought nothing and made every readability check useless.
+$SUDO chown "$RUN_USER" /etc/npc.env
 $SUDO chmod 600 /etc/npc.env
 as_user mkdir -p "$RUN_HOME/.npc"
 
