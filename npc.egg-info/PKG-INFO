@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: npc
+Version: 0.2.0
+Summary: Clicks two buttons in a RustDesk window on a virtual display, forever, and messages a human when the screen stops looking boring
+Requires-Python: >=3.10
+Requires-Dist: pyautogui
+Requires-Dist: mss
+Requires-Dist: opencv-python-headless
+Requires-Dist: numpy

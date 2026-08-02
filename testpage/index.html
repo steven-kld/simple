@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Appointment queue</title>
+<style>
+  /* Deliberately static: no hover, focus, active or transition styles anywhere.
+     A focus ring or a hover highlight left behind by the cursor is a pixel
+     change the watcher would have to absorb, and the whole point of this page
+     is that it changes only when the state changes. */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #f2f2f2; color: #222;
+    font: 16px/1.4 Arial, Helvetica, sans-serif;
+    user-select: none; -webkit-user-select: none;
+  }
+  button, input { outline: none !important; }
+  button::-moz-focus-inner { border: 0; }
+
+  #flag {
+    position: fixed; top: 12px; left: 12px;
+    width: 16px; height: 16px; margin: 0;
+  }
+
+  #page {
+    height: 100%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  h1 { font-size: 22px; font-weight: normal; margin: 0 0 28px; color: #444; }
+
+  #book {
+    width: 260px; height: 64px;
+    font-size: 22px; font-weight: bold; letter-spacing: 2px;
+    color: #fff; background: #1c5aa8;
+    border: 1px solid #14406f; border-radius: 4px;
+    cursor: pointer;
+  }
+
+  #dialog { display: none; }
+  #dialog.on { display: block; }
+
+  #box {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    text-align: center;
+    background: #fff; border: 2px solid #999;
+  }
+  /* the boring response */
+  #box.busy {
+    top: 220px; width: 420px; padding: 26px 20px;
+  }
+  /* the one worth waking someone up for */
+  #box.queued {
+    top: 150px; width: 640px; padding: 54px 20px;
+    background: #e6f8e9; border: 6px solid #1e9e3e;
+  }
+
+  #message { margin: 0 0 24px; }
+  .busy #message { font-size: 20px; color: #333; }
+  .queued #message { font-size: 44px; font-weight: bold; color: #10772f; }
+
+  #ok {
+    border-radius: 4px; cursor: pointer; color: #fff;
+  }
+  .busy #ok {
+    width: 120px; height: 40px; font-size: 16px;
+    background: #666; border: 1px solid #444;
+  }
+  .queued #ok {
+    width: 260px; height: 72px; font-size: 30px; font-weight: bold;
+    background: #1e9e3e; border: 2px solid #14702c;
+  }
+</style>
+</head>
+<body>
+
+<input type="checkbox" id="flag">
+
+<div id="page">
+  <h1>Appointment queue</h1>
+  <button id="book">BOOK</button>
+</div>
+
+<div id="dialog">
+  <div id="box" class="busy">
+    <p id="message">все занято</p>
+    <button id="ok">OK</button>
+  </div>
+</div>
+
+<script>
+  var dialog = document.getElementById('dialog');
+  var box = document.getElementById('box');
+  var message = document.getElementById('message');
+  var pending = null;
+
+  document.getElementById('book').onclick = function () {
+    if (pending) return;
+    // A second of thinking, exactly as the real page takes to answer.
+    pending = setTimeout(function () {
+      pending = null;
+      var queued = document.getElementById('flag').checked;
+      box.className = queued ? 'queued' : 'busy';
+      message.textContent = queued ? 'Вы в очереди' : 'все занято';
+      dialog.className = 'on';
+    }, 1000);
+  };
+
+  document.getElementById('ok').onclick = function () {
+    dialog.className = '';
+  };
+</script>
+
+</body>
+</html>

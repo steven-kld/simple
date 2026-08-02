@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "npc"
+version = "0.2.0"
+description = "Clicks two buttons in a RustDesk window on a virtual display, forever, and messages a human when the screen stops looking boring"
+requires-python = ">=3.10"
+dependencies = [
+    "pyautogui",
+    "mss",
+    "opencv-python-headless",
+    "numpy",
+]
+
+[project.scripts]
+npc-setup = "npc.cli:main_setup"
+npc-watch = "npc.cli:main_watch"
+npc-calibrate = "npc.cli:main_calibrate"
+
+[tool.setuptools]
+packages = ["npc"]
