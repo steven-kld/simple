@@ -5,25 +5,25 @@ are taken within minutes. Someone has to sit there clicking **BOOK**, reading
 "all appointments are currently booked", clicking **OK**, and repeating, through
 the Australian night.
 
-This is the server that does that instead. It runs on a GCP VM in Sydney, drives
-a **RustDesk client window on a virtual display**, and clicks two buttons on a
-laptop 8,000 km away. When the response finally differs — a slot exists — it
-sends a Telegram message with the screenshot and stops clicking, so the operator
-can take over and fill in the details by hand.
+This is the server that does that instead. It runs on any Linux box — a VM, a
+VPS, a spare machine — drives a **RustDesk client window on a virtual display**,
+and clicks two buttons on a laptop 8,000 km away. When the response finally
+differs — a slot exists — it sends a Telegram message with the screenshot and
+stops clicking, so the operator can take over and fill in the details by hand.
 
 ```
 Son's laptop (Australia)          RustDesk HOST. Browser, queue page.
    ▲                    ▲          Nothing custom installed. Never touched again.
    │ automation         │ operator, on demand
    │                    │
-GCP VM (Sydney)         Operator's laptop (US)
+Linux box (Sydney)      Operator's laptop (US)
 Xvfb + RustDesk CLIENT  RustDesk only. Runs nothing.
 + this program          Waits for a Telegram message.
 ```
 
-The VM goes in **australia-southeast1**. Proximity to the son keeps the RustDesk
-stream sharp and the loop responsive; proximity to the operator buys nothing,
-because they only read Telegram.
+Put the box **near the son** — australia-southeast1 if it is a GCP VM.
+Proximity keeps the RustDesk stream sharp and the loop responsive; proximity to
+the operator buys nothing, because they only read Telegram.
 
 **The reference is the boring state.** Matching it means nothing has happened,
 keep going. Deviating from it means something happened, wake the human. That
@@ -44,7 +44,8 @@ inversion is the whole design.
 | [selftest.py](selftest.py) | The whole loop against fake frames, with no display and no input |
 | [docs/index.html](docs/index.html) | A stand-in queue page, for rehearsing the loop locally |
 | [docs/state.json](docs/state.json) | The rehearsal's remote switch, polled by that page |
-| [deploy/bootstrap.sh](deploy/bootstrap.sh) | Fresh VM to running services, in one command |
+| [deploy/npc.sh](deploy/npc.sh) | `up` and `down` — the whole system, on any systemd box |
+| [deploy/bootstrap.sh](deploy/bootstrap.sh) | The install half: packages, venv, units. Called by `up` |
 | [deploy/display.sh](deploy/display.sh) | Xvfb, openbox and x11vnc, which share a lifetime |
 | [deploy/rustdesk-client.sh](deploy/rustdesk-client.sh) | The client, with the environment it needs |
 | [deploy/pin-window.sh](deploy/pin-window.sh) | Clears fullscreen, pins the geometry, verifies it |
@@ -99,15 +100,17 @@ its own message.
 
 In order. Each step is a section below.
 
-1. [Create the VM](#install-on-the-vm) in australia-southeast1 and install the packages.
-2. [Start Xvfb, openbox and x11vnc](#the-virtual-display), and check Mesa reports llvmpipe.
-3. [Start RustDesk](#the-virtual-display) and connect it to the son's machine **by hand**,
-   over the [VNC tunnel](#reaching-the-vms-display). Size the window, then never touch it again.
-4. Get the queue page to its "all booked" state, then
+1. `deploy/npc.sh up` on a box near the son — it [installs and starts
+   everything](#deploying-it) except the loop, and stops if Mesa is wrong.
+2. Reach the box's own display over the [VNC tunnel](#reaching-the-vms-display),
+   connect RustDesk to the son's machine **by hand**, and run `pin-window.sh`.
+   Then never touch that window again.
+3. Get the queue page to its "all booked" state, then
    [record the reference and the two coordinates](#setup-recording-the-coordinates-and-the-reference).
-5. [Calibrate the threshold](#calibrating-the-threshold).
-6. [Run it](#running-it) with the Telegram variables set, then install the systemd unit.
-7. Walk the [acceptance test](#acceptance-test).
+4. [Calibrate the threshold](#calibrating-the-threshold) and put it in the plan.
+5. Put the bot token in `/etc/npc.env`, then `deploy/npc.sh up` again — this
+   time it starts the loop as well.
+6. Walk the [acceptance test](#acceptance-test).
 
 If you only want to see the machinery work, skip all of that and do the
 [local rehearsal](#a-local-rehearsal-no-vm-no-australia) first — it needs no GCP,
@@ -115,10 +118,42 @@ no RustDesk and no Australia.
 
 ---
 
-## Install on the VM
+## Deploying it
 
-Debian bookworm or Ubuntu. No GPU, no physical screen. `e2-standard-2` is
-enough: the work is software rasterising a video stream, which is CPU.
+Any Debian or Ubuntu box with systemd. No GPU, no physical screen, two cores is
+plenty: the work is software-rasterising a video stream, which is CPU. Put it
+near the son rather than near the operator — proximity keeps the RustDesk
+stream sharp, and the operator only reads Telegram.
+
+Two commands, and they are the whole interface:
+
+```bash
+git clone <this repo> ~/simple
+~/simple/deploy/npc.sh up          # install if needed, start everything
+~/simple/deploy/npc.sh down        # stop everything
+```
+
+`up` is idempotent: it installs only what is absent, starts only what is
+stopped, and enables the units so a reboot brings them back. It refuses to
+continue unless Mesa reports llvmpipe, because nothing downstream works without
+it and no environment variable rescues it.
+
+What `up` **cannot** do is start the watch loop on a fresh install, and it says
+so rather than pretending: the loop needs a reference recorded against the
+peer's real screen, which needs a human to connect RustDesk by hand first. Once
+`~/.npc/refs/<name>/` and the Telegram credentials in `/etc/npc.env` both
+exist, the next `up` starts the loop too.
+
+```bash
+~/simple/deploy/npc.sh status      # units, what the agent sees, last log lines
+~/simple/deploy/npc.sh logs        # follow the loop
+```
+
+No firewall rule is needed and none should be added: nothing listens on a
+public interface. RustDesk makes outbound connections only, and x11vnc binds
+loopback, reached through an SSH tunnel.
+
+On GCP, if that is where the box lives:
 
 ```bash
 gcloud compute instances create npc-watcher \
@@ -126,30 +161,10 @@ gcloud compute instances create npc-watcher \
   --machine-type=e2-standard-2 \
   --image-family=debian-12 --image-project=debian-cloud \
   --boot-disk-size=20GB
-
-gcloud compute ssh npc-watcher --zone=australia-southeast1-b
 ```
 
-No firewall rule is needed and none should be added: nothing listens on a public
-interface. x11vnc binds loopback and is reached through the SSH tunnel that
-`gcloud compute ssh` already gives you.
-
-Then, on the VM, one script does the rest:
-
-```bash
-git clone <this repo> ~/simple
-~/simple/deploy/bootstrap.sh
-```
-
-[deploy/bootstrap.sh](deploy/bootstrap.sh) installs the packages and the
-RustDesk client, builds the venv, writes and starts the display and client
-services, and refuses to finish unless Mesa reports llvmpipe. It deliberately
-does **not** start the watch loop: that needs a human to connect RustDesk to
-the peer, pin the window and record the reference, and nothing can do those
-without seeing the son's screen. It prints those remaining steps and stops.
-
-Everything below this line is what the script does and why, for when it does
-not survive contact with a newer Debian.
+Everything below this line is what [deploy/bootstrap.sh](deploy/bootstrap.sh)
+does and why, for when it does not survive contact with a newer Debian.
 
 ```bash
 sudo apt install -y xvfb openbox x11vnc xdotool wmctrl x11-utils mesa-utils \
@@ -499,79 +514,25 @@ the silent failure this system exists to prevent.
 
 ### As services
 
-Four units, started once and left alone. The display stack must survive the SSH
-session that started it, or the whole thing dies when you log out.
+[deploy/bootstrap.sh](deploy/bootstrap.sh) writes three units and
+[deploy/npc.sh](deploy/npc.sh) drives them, so the unit files are not
+reproduced here — read them in the script, where they cannot drift out of date.
+What is worth knowing about their shape:
 
-`/etc/systemd/system/npc-display.service` — Xvfb, the window manager and the
-viewer, in one place because they share a lifetime:
-
-```ini
-[Unit]
-Description=npc virtual display
-After=network-online.target
-
-[Service]
-User=npc
-ExecStart=/bin/bash -c '\
-  Xvfb :99 -screen 0 1920x1080x24 +extension GLX +extension RANDR +extension RENDER -noreset & \
-  sleep 2; \
-  DISPLAY=:99 openbox & \
-  DISPLAY=:99 x11vnc -display :99 -rfbport 5900 -localhost -forever -shared -noxdamage \
-      -afteraccept "touch /tmp/npc-operator-present" -gone "rm -f /tmp/npc-operator-present"'
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`/etc/systemd/system/npc-rustdesk.service` — the client, through the script
-above, which is where the environment and the `pkill` live:
-
-```ini
-[Unit]
-Description=RustDesk client on the virtual display
-After=npc-display.service
-Requires=npc-display.service
-
-[Service]
-User=npc
-ExecStart=/home/npc/bin/rustdesk-client.sh
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now npc-display npc-rustdesk
-DISPLAY=:99 npc-setup --inspect        # the session window should be listed
-```
-
-And the loop itself — `/etc/systemd/system/npc.service`:
-
-```ini
-[Unit]
-Description=npc appointment watcher
-After=network-online.target
-
-[Service]
-User=npc
-Environment=DISPLAY=:99
-Environment=NPC_TELEGRAM_TOKEN=123456:AA...
-Environment=NPC_TELEGRAM_CHAT_ID=987654321
-ExecStart=/usr/local/bin/npc-watch --name booking
-Restart=no
-StandardOutput=append:/home/npc/.npc/events.jsonl
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`Restart=no` on purpose. **Restarting after a stop is manual and should stay
-manual**: the operator connects, confirms the remote screen is in the expected
-state, and starts the loop again. There is no scheduler and no auto-restart. Put
-the token in an `EnvironmentFile=` with mode 600 if the unit file is not private.
+- **`npc-display`** runs Xvfb, openbox and x11vnc together, because they share
+  a lifetime: kill any one and every recorded coordinate is meaningless. It
+  must survive the SSH session that started it, which is the whole reason these
+  are units and not backgrounded commands.
+- **`npc-rustdesk`** gets `RuntimeDirectory=npc`, which is how a system service
+  acquires a writable `XDG_RUNTIME_DIR` without a login session. Without one
+  the client cannot persist its saved peers, and unattended operation is over
+  at the first restart.
+- **`npc`**, the loop, is `Restart=no` on purpose. **Restarting after a stop is
+  manual and stays manual**: the operator connects, confirms the remote screen
+  is in the expected state, and starts it again. A scheduler here would click
+  into whatever the screen happened to show. Its credentials come from
+  `EnvironmentFile=/etc/npc.env`, mode 600 — a token in a unit file is a token
+  in a world-readable file.
 
 Nothing invokes the loop remotely. There is no daemon, no port, no `--scenario`
 stdin contract, and no per-run SSH invocation — that was the previous design,

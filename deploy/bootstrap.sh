@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# One-shot bootstrap for a fresh Debian 12 / Ubuntu VM in australia-southeast1.
+# Install everything on a Debian or Ubuntu box. Idempotent: safe to re-run.
 #
-# Run it from a checkout, as an ordinary user with sudo:
-#
-#     git clone <repo> ~/simple && ~/simple/deploy/bootstrap.sh
-#
-# It installs the packages, the RustDesk client and this program, writes the
-# display and client services, and starts them. It deliberately does NOT start
-# the watch loop: that needs a human to connect RustDesk to the peer, pin the
-# window and record the reference first, and no amount of scripting can do
-# those without seeing the son's screen.
+# You do not normally call this directly - `deploy/npc.sh up` runs it when the
+# services are missing. It installs and writes; starting and stopping belong to
+# npc.sh, so there is exactly one place that decides what is running.
 set -euo pipefail
+
+command -v apt-get >/dev/null || {
+    echo "bootstrap: this installer is apt-only (Debian, Ubuntu)." >&2
+    echo "bootstrap: on another distro install the equivalents of" >&2
+    echo "  xvfb openbox x11vnc xdotool wmctrl x11-utils mesa-utils dbus-x11" >&2
+    echo "  libgl1-mesa-dri libglx-mesa0 libegl-mesa0 python3-venv python3-tk" >&2
+    echo "plus the RustDesk 1.4.9 Flutter client, then re-run npc.sh up." >&2
+    exit 1
+}
 
 RUN_USER="${SUDO_USER:-$(id -un)}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
@@ -162,43 +165,4 @@ sudo chmod 600 /etc/npc.env
 sudo -u "$RUN_USER" mkdir -p "$RUN_HOME/.npc"
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now npc-display npc-rustdesk
-
-# --- the one check that decides everything ----------------------------------
-say "Mesa"
-sleep 5
-renderer="$(DISPLAY=$DISPLAY_NUM glxinfo -B 2>/dev/null | grep -i 'OpenGL renderer' || true)"
-echo "${renderer:-(no answer from glxinfo)}"
-case "$renderer" in
-    *llvmpipe*) ;;
-    *) die "Mesa is not reporting llvmpipe. Nothing else will work and no
-     environment variable will rescue it - check that Xvfb started with
-     +extension GLX and that libgl1-mesa-dri is installed." ;;
-esac
-
-cat <<NEXT
-
-$(printf '\033[1mInstalled.\033[0m') What is left needs eyes on the son's screen:
-
-  1. From your laptop:   gcloud compute ssh $(hostname) --zone=australia-southeast1-b -- -N -L 5900:127.0.0.1:5900
-     then point a VNC client at 127.0.0.1:5900
-
-  2. In that VNC window, connect RustDesk to the peer by hand and tick
-     "remember password". Doing it by hand keeps the password out of
-     /proc/*/cmdline, where --connect --password would put it.
-
-  3. $BIN/pin-window.sh          # clears fullscreen, pins 1600x950+100+40, verifies
-
-  4. Get the queue page to its "all booked" state, then:
-       npc-setup --inspect
-       DISPLAY=$DISPLAY_NUM watch -n0.2 xdotool getmouselocation   # hover BOOK, then OK
-       npc-setup --name booking --book X,Y --ok X,Y --region-around ok --radius 200
-       npc-calibrate --name booking --shots 10 --interval 3
-
-  5. Put the recommended threshold in ~/.npc/scenarios/booking.json,
-     the bot token and chat id in /etc/npc.env, then:
-       sudo systemctl start npc
-
-  Disconnect the VNC viewer when you are done: while it is attached the loop
-  pauses rather than fighting you for the cursor.
-NEXT
+echo "bootstrap: installed. Services written, nothing started - that is npc.sh up."
