@@ -639,6 +639,46 @@ check(
     lines[-1][:80] if lines else "empty",
 )
 
+# --- the control endpoint ---------------------------------------------------
+
+# A port that starts a mouse on someone else's screen is worth being paranoid
+# about, so the routing and the auth are exercised without opening a socket.
+from npc import control  # noqa: E402  (after the fakes, like everything else)
+
+os.environ[control.TOKEN_ENV] = "s3cret-long-token"
+systemctl_calls = []
+control._systemctl = lambda *args: (systemctl_calls.append(args), (0, "active"))[1]
+GOOD = "Bearer s3cret-long-token"
+
+check("no Authorization header is refused", control.dispatch("GET", "/status", None)[0] == 401)
+check("a wrong token is refused", control.dispatch("GET", "/status", "Bearer nope")[0] == 401)
+check(
+    "the right token without the Bearer prefix is refused",
+    control.dispatch("GET", "/status", "s3cret-long-token")[0] == 401,
+)
+check("the right token is let in", control.dispatch("GET", "/status", GOOD)[0] == 200)
+check(
+    "starting takes a POST, so a crawled link cannot do it",
+    control.dispatch("GET", "/start", GOOD)[0] == 404,
+)
+check("POST /start starts", control.dispatch("POST", "/start", GOOD)[0] == 200)
+check("POST /stop stops", control.dispatch("POST", "/stop", GOOD)[0] == 200)
+check("an unknown path is a 404", control.dispatch("POST", "/rm-rf", GOOD)[0] == 404)
+check(
+    "the endpoint only ever asks systemd about the one unit",
+    {call[1] for call in systemctl_calls} == {"npc"}
+    and {call[0] for call in systemctl_calls} <= {"start", "stop", "is-active"},
+    str(systemctl_calls),
+)
+
+os.environ[control.TOKEN_ENV] = ""
+check("an empty token lets nobody in", control.dispatch("GET", "/status", "Bearer ")[0] == 401)
+try:
+    control.serve()
+    check("without a token it refuses to listen at all", False)
+except control.ControlError as exc:
+    check("without a token it refuses to listen at all", "worse than no start button" in str(exc))
+
 print()
 if failures:
     print(f"{len(failures)} check(s) failed: {', '.join(failures)}")

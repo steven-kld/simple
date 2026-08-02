@@ -18,6 +18,7 @@ dependencies = [
 npc-setup = "npc.cli:main_setup"
 npc-watch = "npc.cli:main_watch"
 npc-calibrate = "npc.cli:main_calibrate"
+npc-control = "npc.cli:main_control"
 
 [tool.setuptools]
 packages = ["npc"]

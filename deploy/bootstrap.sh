@@ -90,7 +90,7 @@ say "npc"
 as_user python3 -m venv "$VENV"
 as_user "$VENV/bin/pip" install -q --upgrade pip
 as_user "$VENV/bin/pip" install -q "$REPO"
-for tool in npc-setup npc-watch npc-calibrate; do
+for tool in npc-setup npc-watch npc-calibrate npc-control; do
     $SUDO ln -sf "$VENV/bin/$tool" "/usr/local/bin/$tool"
 done
 as_user "$VENV/bin/python" "$REPO/selftest.py" >/dev/null || \
@@ -181,12 +181,44 @@ StandardError=append:$RUN_HOME/.npc/events.jsonl
 WantedBy=multi-user.target
 UNIT
 
+# The start button on a port. Bound to loopback unless NPC_CONTROL_BIND says
+# otherwise, and it refuses to serve at all without a token.
+$SUDO tee /etc/systemd/system/npc-control.service >/dev/null <<UNIT
+[Unit]
+Description=npc control endpoint
+After=network-online.target
+
+[Service]
+User=$RUN_USER
+EnvironmentFile=/etc/npc.env
+ExecStart=/usr/local/bin/npc-control
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+# The endpoint asks systemd to start the loop rather than spawning it, so that
+# systemctl stays the one owner of the process. That needs exactly three verbs
+# on exactly one unit - not a general sudo grant, which would make the port a
+# root shell for anyone who guessed the token.
+$SUDO tee /etc/sudoers.d/npc-control >/dev/null <<SUDOERS
+$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl start npc, /usr/bin/systemctl stop npc, /usr/bin/systemctl is-active npc
+SUDOERS
+$SUDO chmod 440 /etc/sudoers.d/npc-control
+$SUDO visudo -c -f /etc/sudoers.d/npc-control >/dev/null || \
+    die "the sudoers snippet did not validate; removed nothing, fix it by hand"
+
 # The token is a credential: it never belongs in a unit file that is world
 # readable, and never in the log.
 if [ ! -f /etc/npc.env ]; then
     $SUDO tee /etc/npc.env >/dev/null <<'ENV'
 NPC_TELEGRAM_TOKEN=
 NPC_TELEGRAM_CHAT_ID=
+NPC_CONTROL_TOKEN=
+NPC_CONTROL_BIND=127.0.0.1
+NPC_CONTROL_PORT=8787
 ENV
 fi
 $SUDO chmod 600 /etc/npc.env

@@ -40,7 +40,8 @@ inversion is the whole design.
 | [npc/mouse.py](npc/mouse.py) | The Bezier move and the click |
 | [npc/notify.py](npc/notify.py) | Telegram, over urllib, with a photo-to-text fallback |
 | [npc/runner.py](npc/runner.py) | Setup, the watch loop, the lock, the log |
-| [npc/cli.py](npc/cli.py) | `npc-setup`, `npc-watch`, `npc-calibrate` |
+| [npc/cli.py](npc/cli.py) | `npc-setup`, `npc-watch`, `npc-calibrate`, `npc-control` |
+| [npc/control.py](npc/control.py) | The start button on a port: three routes, one token |
 | [selftest.py](selftest.py) | The whole loop against fake frames, with no display and no input |
 | [docs/index.html](docs/index.html) | A stand-in queue page, for rehearsing the loop locally |
 | [docs/state.json](docs/state.json) | The rehearsal's remote switch, polled by that page |
@@ -108,8 +109,9 @@ In order. Each step is a section below.
 3. Get the queue page to its "all booked" state, then
    [record the reference and the two coordinates](#setup-recording-the-coordinates-and-the-reference).
 4. [Calibrate the threshold](#calibrating-the-threshold) and put it in the plan.
-5. Put the bot token in `/etc/npc.env`, then `deploy/npc.sh up` again — this
-   time it starts the loop as well.
+5. Put the bot token in `/etc/npc.env` and `deploy/npc.sh up` again, then
+   [start the loop](#starting-it-from-8000-km-away) — `npc.sh start`, or a POST
+   to the control endpoint from wherever you are.
 6. Walk the [acceptance test](#acceptance-test).
 
 If you only want to see the machinery work, skip all of that and do the
@@ -153,11 +155,10 @@ stopped, and enables the units so a reboot brings them back. It refuses to
 continue unless Mesa reports llvmpipe, because nothing downstream works without
 it and no environment variable rescues it.
 
-What `up` **cannot** do is start the watch loop on a fresh install, and it says
-so rather than pretending: the loop needs a reference recorded against the
-peer's real screen, which needs a human to connect RustDesk by hand first. Once
-`~/.npc/refs/<name>/` and the Telegram credentials in `/etc/npc.env` both
-exist, the next `up` starts the loop too.
+What `up` never does is start the clicking loop. That is an explicit act,
+[here or over HTTP](#starting-it-from-8000-km-away), because someone has to
+know the peer's screen is in the state the reference was recorded against —
+and no script can know that.
 
 ```bash
 ~/simple/deploy/npc.sh status      # units, what the agent sees, last log lines
@@ -206,7 +207,7 @@ Everything Python is in `pyproject.toml`, so the venv is disposable.
 Check the install without a display:
 
 ```bash
-~/.npc-venv/bin/python selftest.py     # 56 checks, no X server needed
+~/.npc-venv/bin/python selftest.py     # 67 checks, no X server needed
 ```
 
 If `python3-tk` is missing you will not get a traceback, you will get this —
@@ -549,9 +550,58 @@ What is worth knowing about their shape:
   `EnvironmentFile=/etc/npc.env`, mode 600 — a token in a unit file is a token
   in a world-readable file.
 
-Nothing invokes the loop remotely. There is no daemon, no port, no `--scenario`
-stdin contract, and no per-run SSH invocation — that was the previous design,
-when this drove a browser on a laptop.
+There is no `--scenario` stdin contract and no per-run SSH invocation — that
+was the previous design, when this drove a browser on a laptop. There *is* now
+a port, which the older design forbade outright;
+[why, and what it costs](#starting-it-from-8000-km-away).
+
+### Starting it from 8,000 km away
+
+The loop does not start by itself. `npc.sh up` brings up the display, the
+client and the control endpoint, and stops there — someone has to know the
+peer's screen is in the state the reference was recorded against, and no
+script can know that.
+
+Starting it is therefore an explicit act, from the box:
+
+```bash
+deploy/npc.sh start
+deploy/npc.sh stop         # the loop only; the display stays up
+```
+
+or over HTTP, which is the point of [npc/control.py](npc/control.py):
+
+```bash
+curl -X POST -H "Authorization: Bearer $NPC_CONTROL_TOKEN" http://HOST:8787/start
+curl -X POST -H "Authorization: Bearer $NPC_CONTROL_TOKEN" http://HOST:8787/stop
+curl        -H "Authorization: Bearer $NPC_CONTROL_TOKEN" http://HOST:8787/status
+```
+
+This contradicts an older rule of this design — *nothing invokes the loop
+remotely, there is no daemon and no port* — and the contradiction is
+deliberate. The rule existed because a machine that drives a mouse on someone
+else's screen should not also be listening. That is still true, so the endpoint
+is as small as the requirement allows:
+
+- **It refuses to serve without a token**, exactly as the loop refuses to run
+  without Telegram credentials. An unauthenticated start button on the public
+  internet is worse than no start button.
+- **It binds `127.0.0.1` by default.** Reaching it then means an SSH tunnel,
+  which is how x11vnc is already reached. Setting `NPC_CONTROL_BIND=0.0.0.0`
+  is a decision, not a default, and it is the one that needs a firewall rule.
+- **It does not run the loop**, it asks systemd to. `systemctl status npc`
+  stays the truth, and the endpoint's whole privilege is a three-verb sudoers
+  grant on one unit — `start`, `stop`, `is-active` — rather than general sudo,
+  which would make the port a root shell for anyone who guessed the token.
+- **Starting takes a POST**, so a crawler or a pasted link cannot do it.
+- **It logs nothing per request**, so a token can never land in the journal.
+
+Compare with the alternative that needs no port at all: the loop could poll a
+file the way [the rehearsal page polls its
+switch](#a-local-rehearsal-no-vm-no-australia), and "start" would be a commit.
+That has no inbound surface whatsoever. It was not built because a poll makes
+starting slow and stopping slower, and stopping is the one that matters when a
+window has moved and the mouse is clicking the wrong thing.
 
 ### What it prints
 
@@ -759,7 +809,9 @@ one and two mismatches being absorbed and three not, the stop, the auto-resume,
 a booking form on screen keeping the loop from resuming, a vanished window and a
 moved window, the operator pause, the resolution guard, the busy lock, plan
 validation, the multipart upload body, the token never reaching a log line, the
-photo-to-text fallback, and the geometry of the mouse path. 56 checks, no display
+photo-to-text fallback, the geometry of the mouse path, and the control
+endpoint refusing every request that is not a POST carrying the right bearer
+token — including refusing to listen at all without one. 67 checks, no display
 needed.
 
 Run end to end on a real `Xvfb :77` against a stand-in window renamed to

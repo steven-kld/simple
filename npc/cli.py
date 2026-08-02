@@ -298,6 +298,31 @@ def _failure(runner, name, exc):
     return payload
 
 
+# --- npc-control --------------------------------------------------------
+
+
+def control(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="npc-control",
+        description="A start button on a port: POST /start, POST /stop, GET /status.",
+    )
+    parser.parse_args(argv)
+
+    # Imported late and separately: it touches neither X nor the display, and a
+    # box that only serves the button should not need pyautogui to be sane.
+    from . import control as control_module
+
+    try:
+        control_module.serve()
+    except KeyboardInterrupt:
+        return _emit({"status": "ok", "message": "stopped by hand"})
+    except control_module.ControlError as exc:
+        return _emit({"status": "error", "message": str(exc)})
+    except OSError as exc:
+        return _emit({"status": "error", "message": f"cannot listen: {exc}"})
+    return 0
+
+
 def main_setup():
     sys.exit(setup())
 
@@ -308,3 +333,7 @@ def main_watch():
 
 def main_calibrate():
     sys.exit(calibrate())
+
+
+def main_control():
+    sys.exit(control())

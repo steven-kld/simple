@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The whole system, up or down, on any systemd Linux box.
 #
-#   ./deploy/npc.sh up       install if needed, start everything, say what is missing
+#   ./deploy/npc.sh up       install if needed, start the display, client and endpoint
+#   ./deploy/npc.sh start    start the clicking loop (also POST /start)
+#   ./deploy/npc.sh stop     stop the loop, leave everything else up
 #   ./deploy/npc.sh down     stop everything
 #   ./deploy/npc.sh status   what is running, what it sees
 #   ./deploy/npc.sh logs     follow the loop
@@ -13,7 +15,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DISPLAY_NUM="${NPC_DISPLAY:-:99}"
 NAME="${NPC_NAME:-booking}"
-UNITS=(npc-display npc-rustdesk)
+UNITS=(npc-display npc-rustdesk npc-control)
 ENV_FILE=/etc/npc.env
 UNIT_FILE=/etc/systemd/system/npc-display.service
 
@@ -79,13 +81,14 @@ Check that Xvfb started with +extension GLX and that libgl1-mesa-dri is installe
     esac
 
     if ready_to_watch; then
-        bold "starting the loop"
-        $SUDO systemctl start npc
-        echo "  watching '$NAME'. Follow it with: $0 logs"
+        echo "  ready. Start the loop when the peer's screen is where you want it:"
+        echo "    $0 start                       # here"
+        echo "    curl -X POST -H 'Authorization: Bearer <token>' \\"
+        echo "         http://<host>:8787/start  # from anywhere"
     else
         warn "
-The display and the client are up. The loop is not, and cannot be yet -
-it needs a reference recorded against the peer's real screen:
+The display, the client and the control endpoint are up. The loop is not, and
+cannot be yet - it needs a reference recorded against the peer's real screen:
 
   1. ssh -N -L 5900:127.0.0.1:5900 $(id -un)@$(hostname -f 2>/dev/null || hostname)
      then point a VNC client at 127.0.0.1:5900
@@ -103,11 +106,24 @@ it needs a reference recorded against the peer's real screen:
        npc-calibrate --name $NAME --shots 10 --interval 3
 
   5. Put the recommended threshold in $HOME_DIR/scenarios/$NAME.json and the
-     bot token in $ENV_FILE, then run '$0 up' again.
+     tokens in $ENV_FILE, then run '$0 up' again.
 
 Disconnect the VNC viewer when you are done: while it is attached the loop
 pauses rather than fighting you for the cursor."
     fi
+    ;;
+
+start)
+    # The loop never starts by itself, here or over HTTP: someone has to know
+    # the peer's screen is in the state the reference was recorded against.
+    ready_to_watch || die "no reference for '$NAME' yet, or $ENV_FILE is empty"
+    $SUDO systemctl start npc
+    echo "  watching '$NAME'. Follow it with: $0 logs"
+    ;;
+
+stop)
+    $SUDO systemctl stop npc
+    echo "  loop stopped. The display and the client are still up."
     ;;
 
 down)
@@ -123,7 +139,7 @@ down)
 
 status)
     installed || die "not installed; run '$0 up'"
-    for unit in npc-display npc-rustdesk npc; do
+    for unit in npc-display npc-rustdesk npc-control npc; do
         printf '  %-14s %s\n' "$unit" "$(systemctl is-active "$unit" 2>/dev/null || true)"
     done
     echo
@@ -138,6 +154,6 @@ logs)
     ;;
 
 *)
-    die "usage: $0 [up|down|status|logs]"
+    die "usage: $0 [up|start|stop|down|status|logs]"
     ;;
 esac
