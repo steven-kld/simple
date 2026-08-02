@@ -132,8 +132,10 @@ Check that Xvfb started with +extension GLX and that libgl1-mesa-dri is installe
 The display, the client and the control endpoint are up. The loop is not:
   $reason
 
-  1. ssh -N -L 5900:127.0.0.1:5900 $(id -un)@$(hostname -f 2>/dev/null || hostname)
-     then point a VNC client at 127.0.0.1:5900
+  1. Reach this display. On the box itself that is just:
+       xtigervncviewer 127.0.0.1:5900
+     From anywhere else, tunnel first - x11vnc listens on loopback only:
+       ssh -N -L 5900:127.0.0.1:5900 $(id -un)@$(hostname -f 2>/dev/null || hostname)
 
   2. In that window, connect RustDesk to the peer by hand and tick
      'remember password' - by hand keeps the password out of /proc/*/cmdline,
