@@ -1,4 +1,0 @@
-[console_scripts]
-npc-calibrate = npc.cli:main_calibrate
-npc-setup = npc.cli:main_setup
-npc-watch = npc.cli:main_watch

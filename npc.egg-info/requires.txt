@@ -1,4 +1,0 @@
-pyautogui
-mss
-opencv-python-headless
-numpy
