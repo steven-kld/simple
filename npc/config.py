@@ -134,17 +134,19 @@ def bootstrap_display(display=None, xauthority=None):
     """Point this process at the virtual display.
 
     A systemd unit or a non-interactive SSH command inherits neither, so both
-    are set here before any X client library is imported. Xvfb started without
-    -auth needs no cookie, so XAUTHORITY is set only if one is actually there.
+    are set here before any X client library is imported.
+
+    Xvfb started without -auth needs no cookie, but python-xlib does not treat
+    "no XAUTHORITY" as "no authority needed": it falls back to ~/.Xauthority
+    and raises XauthError when that is absent, which under systemd it always
+    is. Pointing it at an empty file is how you say "there is no cookie, and
+    that is fine" - it warns and connects. Inheriting a real one from a
+    desktop session is why this works interactively and not as a service.
     """
     os.environ["DISPLAY"] = display or os.environ.get("NPC_DISPLAY") or DEFAULT_DISPLAY
 
-    xauth = xauthority or os.environ.get("NPC_XAUTHORITY")
-    if not xauth:
-        for candidate in _xauthority_candidates():
-            if candidate.exists():
-                xauth = str(candidate)
-                break
-    if xauth:
-        os.environ["XAUTHORITY"] = xauth
-    return os.environ["DISPLAY"], os.environ.get("XAUTHORITY")
+    xauth = xauthority or os.environ.get("NPC_XAUTHORITY") or os.environ.get("XAUTHORITY")
+    if not xauth or not Path(xauth).exists():
+        xauth = next((str(c) for c in _xauthority_candidates() if c.exists()), os.devnull)
+    os.environ["XAUTHORITY"] = xauth
+    return os.environ["DISPLAY"], os.environ["XAUTHORITY"]

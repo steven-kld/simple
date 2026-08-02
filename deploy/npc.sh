@@ -69,10 +69,10 @@ why_not_ready() {
         echo "no reference at $HOME_DIR/refs/$NAME/ - record one with npc-setup"; return; }
     [ -e "$ENV_FILE" ] || { echo "$ENV_FILE is missing; '$0 up' writes it"; return; }
 
-    env_text="$(read_env)"
+    env_text="$(read_env || true)"
     # Unreadable without a password is not the same as empty, and guessing
     # either way would be a lie. Let the loop's own refusal be the check.
-    [ -n "$env_text" ] || return
+    [ -n "$env_text" ] || return 0
     grep -q '^NPC_TELEGRAM_TOKEN=.\+' <<<"$env_text" || {
         echo "NPC_TELEGRAM_TOKEN is empty in $ENV_FILE"; return; }
     grep -q '^NPC_TELEGRAM_CHAT_ID=.\+' <<<"$env_text" || {
@@ -82,20 +82,32 @@ why_not_ready() {
     # one that was missing: a reference and a token say nothing about whether
     # anyone ever connected to the peer. Reporting "ready" with no session
     # window is the same silent lie the dead-session alert exists to catch.
-    command -v npc-setup >/dev/null || return
-    seen="$(DISPLAY=$DISPLAY_NUM npc-setup --inspect 2>/dev/null)" || return
+    command -v npc-setup >/dev/null || return 0
+    seen="$(DISPLAY=$DISPLAY_NUM npc-setup --inspect 2>/dev/null || true)"
+    [ -n "$seen" ] || return 0
     grep -q '"windows": \[\]' <<<"$seen" && {
         echo "no RustDesk session window on $DISPLAY_NUM - connect to the peer over
   the VNC tunnel, then run $RUN_HOME/bin/pin-window.sh"; return; }
     grep -q '"fullscreen": true' <<<"$seen" && {
         echo "the session window is fullscreen, so its geometry is not pinned -
-  run $RUN_HOME/bin/pin-window.sh"; return; }
+  run $RUN_HOME/bin/pin-window.sh"; return 0; }
+
+    # Explicit, and not decoration. Without it the function inherits the status
+    # of the grep above, which fails precisely when nothing is wrong - and
+    # `reason="$(why_not_ready)"` under `set -e` then kills the script silently.
+    # The readier the system, the more reliably it refused to start.
+    return 0
 }
 
 case "${1:-up}" in
 
 up)
-    installed || { bold "installing"; "$REPO/deploy/bootstrap.sh"; }
+    # Unconditionally, not just when nothing is installed: bootstrap installs
+    # this package into its own venv as a copy, so skipping it means a git pull
+    # never reaches the running service. Converging every time is the only way
+    # `up` can honestly claim the box matches the checkout.
+    bold "installing"
+    "$REPO/deploy/bootstrap.sh"
 
     bold "starting the display and the client"
     # enable, not just start: on a server the point is surviving a reboot.

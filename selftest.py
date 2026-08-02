@@ -639,6 +639,40 @@ check(
     lines[-1][:80] if lines else "empty",
 )
 
+# --- the display bootstrap --------------------------------------------------
+
+# Under systemd there is no XAUTHORITY and no ~/.Xauthority, and python-xlib
+# reads that as "look in ~/.Xauthority" rather than "no cookie needed", then
+# raises. An empty file is how you say the second thing. This is why the loop
+# ran by hand and failed as a service, so it is asserted rather than assumed.
+saved_env = {k: os.environ.get(k) for k in ("DISPLAY", "XAUTHORITY", "NPC_XAUTHORITY")}
+for key in saved_env:
+    os.environ.pop(key, None)
+_, xauth = config.bootstrap_display(":77")
+check(
+    "with no cookie anywhere, XAUTHORITY points at an empty file rather than nothing",
+    xauth == os.devnull and os.environ["XAUTHORITY"] == os.devnull,
+    str(xauth),
+)
+
+with tempfile.NamedTemporaryFile() as real_cookie:
+    _, xauth = config.bootstrap_display(":77", real_cookie.name)
+    check("an explicit cookie is used as given", xauth == real_cookie.name, str(xauth))
+
+os.environ["XAUTHORITY"] = "/nonexistent/cookie"
+_, xauth = config.bootstrap_display(":77")
+check(
+    "an inherited XAUTHORITY that does not exist is not trusted",
+    xauth == os.devnull,
+    str(xauth),
+)
+for key, value in saved_env.items():
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
+
+
 # --- the control endpoint ---------------------------------------------------
 
 # A port that starts a mouse on someone else's screen is worth being paranoid

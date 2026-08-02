@@ -150,8 +150,11 @@ the usual cloud image. Under plain root there is no login user to hang an X
 session on, so it creates one, `npc`, with a real home directory, rather than
 scattering RustDesk's config through `/root`. Override with `NPC_USER`.
 
-`up` is idempotent: it installs only what is absent, starts only what is
-stopped, and enables the units so a reboot brings them back. It refuses to
+`up` converges rather than skipping: apt installs only what is absent, but the
+package itself is reinstalled every time, because bootstrap copies it into a
+venv and a `git pull` would otherwise never reach the running service. It
+starts only what is stopped, and enables the units so a reboot brings them
+back. It refuses to
 continue unless Mesa reports llvmpipe, because nothing downstream works without
 it and no environment variable rescues it.
 
